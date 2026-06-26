@@ -1,22 +1,30 @@
-# ProtofaceClient
+# Protoface Node Plugin
 
 Browser and React SDK for adding a realtime talking avatar to a voice AI app.
 
-ProtofaceClient handles the realtime connection, media element binding, audio streaming, and avatar playback controls. It works with audio from Vapi, ElevenLabs, Retell, OpenAI Realtime, LiveKit Agents, a custom TTS service, or any browser `MediaStreamTrack`.
+The Protoface Node Plugin handles the realtime connection, media element binding, audio streaming, and avatar playback controls. It works with audio from most TTS providers, including Vapi, ElevenLabs, Retell, OpenAI Realtime, LiveKit Agents, and more.
+
+## About Protoface
+
+Protoface adds a real-time avatar to your AI app or agent.
+
+Get a **free** API key at [protoface.com](https://protoface.com/?utm_source=github&utm_medium=referral&utm_campaign=github_docs&utm_content=protoface-plugin-node).
+
+Read the docs at [docs.protoface.com](https://docs.protoface.com/?utm_source=github&utm_medium=referral&utm_campaign=github_docs&utm_content=protoface-plguin-node).
+
+## Get Started
+
+The fastest way to build with Protoface is to start from an example:
+
+[Visit the Protoface quickstart repo](https://github.com/protoface-ai/protoface-quickstart)
+
+The examples show complete app setups for common voice providers, including LiveKit token routes, React components, and provider-specific audio wiring.
 
 ## Installation
 
 ```bash
 npm install protoface-client
 ```
-
-## Get Started
-
-The fastest way to build with Protoface is to start from an example:
-
-[View the Protoface examples repo](https://github.com/protoface-ai/protoface-js-examples)
-
-The examples show complete app setups for common voice providers, including LiveKit token routes, React components, and provider-specific audio wiring.
 
 ## Direct SDK Usage
 
@@ -30,7 +38,7 @@ To start a real Protoface session, the client needs:
 - a browser participant token for this user
 - a worker token that lets the Protoface avatar participant join the same room
 
-For local prototypes, you can pass a Protoface API key directly to `ProtofaceClient`. For production apps, keep your Protoface API key and LiveKit API secret on your application server, then return short-lived room tokens or a pre-created connection object to the browser.
+For local prototypes, you can pass a Protoface API key directly to `ProtofaceClient`. For production apps, keep your Protoface API key and LiveKit API secret on your application server, then return short-lived room tokens or a signed connection url to the browser.
 
 ```tsx
 import { useRef, useState } from "react";
@@ -121,8 +129,8 @@ For production apps, create a small server route that returns the LiveKit values
 Recommended route behavior:
 
 1. Verify the current user is allowed to start an avatar session.
-2. Mint a short-lived browser participant token for your LiveKit room.
-3. Mint a short-lived worker token for the Protoface avatar participant.
+2. Create a short-lived browser participant token for your LiveKit room.
+3. Create a short-lived worker token for the Protoface avatar to join the room.
 4. Return those values to the browser, then let `ProtofaceClient` create the Protoface session with `apiKey`, `avatarId`, and the returned LiveKit values.
 
 ## Voice Provider Integration
