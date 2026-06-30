@@ -113,7 +113,7 @@ describe("ProtofaceClient", () => {
     expect(stop).toHaveBeenCalled();
   });
 
-  it("supports Simli-style ClearBuffer alias", async () => {
+  it("supports ClearBuffer alias", async () => {
     const transport = new MemoryTransport();
     const client = new ProtofaceClient(makeOptions(transport));
 
