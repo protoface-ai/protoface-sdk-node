@@ -36,10 +36,12 @@ export class LiveKitProtofaceTransport implements ProtofaceTransport {
   private controlMethod = LIVEKIT_CLEAR_BUFFER_RPC;
   private avatarIdentity = DEFAULT_AVATAR_IDENTITY;
   private audioWriterPromise: Promise<LiveKitByteStreamWriter> | null = null;
+  private audioWriteQueue: Promise<void> = Promise.resolve();
 
   constructor(private readonly options: LiveKitProtofaceTransportOptions = {}) {}
 
   async connect(options: ProtofaceTransportConnectOptions): Promise<void> {
+    await this.closeAudioWriter();
     this.audioTopic = options.audioTopic || LIVEKIT_AUDIO_STREAM_TOPIC;
     this.controlMethod = options.controlTopic || LIVEKIT_CLEAR_BUFFER_RPC;
     const connection = requireLiveKitConnection(options.connection);
@@ -66,6 +68,12 @@ export class LiveKitProtofaceTransport implements ProtofaceTransport {
   }
 
   async sendAudioData(data: Uint8Array): Promise<void> {
+    const writeOperation = this.audioWriteQueue.then(() => this.writeAudioData(data));
+    this.audioWriteQueue = writeOperation.catch(() => undefined);
+    await writeOperation;
+  }
+
+  private async writeAudioData(data: Uint8Array): Promise<void> {
     const writer = await this.getAudioWriter();
     try {
       await writer.write(data);
@@ -120,6 +128,7 @@ export class LiveKitProtofaceTransport implements ProtofaceTransport {
   }
 
   private async closeAudioWriter(): Promise<void> {
+    await this.audioWriteQueue.catch(() => undefined);
     const writerPromise = this.audioWriterPromise;
     this.audioWriterPromise = null;
     if (!writerPromise) {
