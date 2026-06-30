@@ -23,8 +23,13 @@ class FakeWriter {
 class FakeLocalParticipant {
   streams: Array<{ options: Record<string, unknown>; writer: FakeWriter }> = [];
   rpcs: Array<Record<string, unknown>> = [];
+  streamFailures = 0;
 
   async streamBytes(options?: Record<string, unknown>) {
+    if (this.streamFailures > 0) {
+      this.streamFailures -= 1;
+      throw new Error("stream failed");
+    }
     const writer = new FakeWriter();
     this.streams.push({ options: options ?? {}, writer });
     return writer;
@@ -63,10 +68,11 @@ const connection: ProtofaceConnection = {
 };
 
 describe("LiveKitProtofaceTransport", () => {
-  it("streams PCM chunks using Protoface's LiveKit audio stream contract", async () => {
+  it("reuses one LiveKit byte stream for PCM chunks until disconnect", async () => {
     const room = new FakeRoom();
     const transport = new LiveKitProtofaceTransport({ roomFactory: () => room });
-    const chunk = new Uint8Array([1, 2, 3]);
+    const firstChunk = new Uint8Array([1, 2, 3]);
+    const secondChunk = new Uint8Array([4, 5, 6]);
 
     await transport.connect({
       connection,
@@ -75,7 +81,8 @@ describe("LiveKitProtofaceTransport", () => {
       audioTopic: LIVEKIT_AUDIO_STREAM_TOPIC,
       controlTopic: LIVEKIT_CLEAR_BUFFER_RPC
     });
-    await transport.sendAudioData(chunk);
+    await transport.sendAudioData(firstChunk);
+    await transport.sendAudioData(secondChunk);
 
     expect(room.connectedWith).toEqual([
       { url: "wss://livekit.example", token: "viewer.jwt" }
@@ -87,7 +94,11 @@ describe("LiveKitProtofaceTransport", () => {
       destinationIdentities: ["protoface-avatar-agent"],
       mimeType: "audio/pcm"
     });
-    expect(room.localParticipant.streams[0]?.writer.chunks).toEqual([chunk]);
+    expect(room.localParticipant.streams[0]?.writer.chunks).toEqual([firstChunk, secondChunk]);
+    expect(room.localParticipant.streams[0]?.writer.closed).toBe(false);
+
+    await transport.disconnect();
+
     expect(room.localParticipant.streams[0]?.writer.closed).toBe(true);
   });
 
@@ -111,5 +122,26 @@ describe("LiveKitProtofaceTransport", () => {
         payload: ""
       }
     ]);
+  });
+
+  it("opens a new byte stream after stream creation fails", async () => {
+    const room = new FakeRoom();
+    room.localParticipant.streamFailures = 1;
+    const transport = new LiveKitProtofaceTransport({ roomFactory: () => room });
+    const chunk = new Uint8Array([1, 2, 3]);
+
+    await transport.connect({
+      connection,
+      videoElement: null,
+      audioElement: null,
+      audioTopic: LIVEKIT_AUDIO_STREAM_TOPIC,
+      controlTopic: LIVEKIT_CLEAR_BUFFER_RPC
+    });
+
+    await expect(transport.sendAudioData(chunk)).rejects.toThrow("stream failed");
+    await transport.sendAudioData(chunk);
+
+    expect(room.localParticipant.streams).toHaveLength(1);
+    expect(room.localParticipant.streams[0]?.writer.chunks).toEqual([chunk]);
   });
 });

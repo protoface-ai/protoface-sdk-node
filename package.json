@@ -1,6 +1,6 @@
 {
   "name": "protoface-client",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Browser-first Protoface WebRTC client for realtime avatar apps.",
   "type": "module",
   "main": "./dist/index.cjs",

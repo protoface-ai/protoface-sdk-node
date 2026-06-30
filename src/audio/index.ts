@@ -20,7 +20,7 @@ export class WebAudioPcmSource implements AudioSource {
 
   constructor(options: WebAudioPcmSourceOptions = {}) {
     this.sampleRate = options.sampleRate ?? 16_000;
-    this.chunkSize = options.chunkSize ?? 4_096;
+    this.chunkSize = options.chunkSize ?? 1_024;
   }
 
   async listenToMediaStreamTrack(
