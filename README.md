@@ -1,4 +1,4 @@
-# Protoface Client
+# Protoface Node SDK
 
 NodeJS and React SDK for adding a realtime Protoface avatar to any voice AI web app.
 
