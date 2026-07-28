@@ -51,6 +51,35 @@ import { useProtofaceClient } from "protoface-client/react";
 
 The hook exposes `start`, `stop`, `sendAudioData`, `listenToMediaStreamTrack`, `clearBuffer`, `status`, and `error`.
 
+## Protoface-Run Conversations
+
+For conversations created from a Protoface embed ID, use `protoface-client/react` or `protoface-client/conversation`. This flow never exposes Protoface API keys, worker tokens, or LiveKit room credentials to your browser code.
+
+```tsx
+import { ProtofaceAvatar, useProtofaceConversation } from "protoface-client/react";
+
+export function Conversation() {
+  const conversation = useProtofaceConversation({ embedId: "YOUR_EMBED_ID" });
+
+  return (
+    <>
+      <ProtofaceAvatar conversation={conversation.conversation} />
+      <button onClick={() => void conversation.requestPermissions()}>
+        Allow device access
+      </button>
+      <button onClick={() => void conversation.acceptConsent()}>
+        Continue
+      </button>
+      <button onClick={() => void conversation.start()}> 
+        Start conversation
+      </button>
+    </>
+  );
+}
+```
+
+Your UI owns the visible flow: device access, privacy acknowledgement, ready-to-begin state, avatar placement, transcript display, and errors. The SDK coordinates setup, LiveKit connection, media attachment, microphone publishing, optional computer vision snapshots, events, and cleanup.
+
 ## How It Works
 
 The package connects a browser app to a Protoface avatar session:

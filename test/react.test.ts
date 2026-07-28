@@ -1,0 +1,201 @@
+import React, { StrictMode, act, useEffect } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+type Listener = (payload: unknown) => void;
+
+const controllers: MockConversationController[] = [];
+
+declare global {
+  var IS_REACT_ACT_ENVIRONMENT: boolean;
+}
+
+globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+
+class MockConversationController {
+  state = {
+    status: "loading",
+    loading: true,
+    device_access_required: false,
+    requesting_device_access: false,
+    consent_required: false,
+    confirming_consent: false,
+    ready_to_begin: false,
+    joining: false,
+    waiting_for_avatar: false,
+    live: false,
+    ending: false,
+    ended: false,
+    failed: false,
+    config: null,
+    consent: null,
+    permissions: { microphone: "unknown", computer_vision: "not_requested" },
+    microphoneEnabled: true,
+    computerVisionEnabled: false,
+    error: null
+  };
+  listeners = new Map<string, Set<Listener>>();
+  load = vi.fn(async () => undefined);
+  requestPermissions = vi.fn(async () => undefined);
+  acceptConsent = vi.fn(async () => undefined);
+  start = vi.fn(async () => undefined);
+  end = vi.fn(async () => undefined);
+  restart = vi.fn(async () => undefined);
+  setMicrophoneEnabled = vi.fn(async (_enabled: boolean) => undefined);
+  toggleMicrophone = vi.fn(async () => undefined);
+  setMediaElements = vi.fn();
+
+  constructor(readonly options: unknown) {
+    controllers.push(this);
+  }
+
+  on(event: string, listener: Listener) {
+    const listeners = this.listeners.get(event) ?? new Set();
+    listeners.add(listener);
+    this.listeners.set(event, listeners);
+    return () => listeners.delete(listener);
+  }
+
+  emit(event: string, payload: unknown = {}) {
+    for (const listener of this.listeners.get(event) ?? []) listener(payload);
+  }
+
+  setStatus(status: string) {
+    this.state = {
+      ...this.state,
+      status,
+      loading: status === "loading",
+      device_access_required: status === "device_access_required",
+      consent_required: status === "consent_required",
+      ready_to_begin: status === "ready_to_begin",
+      live: status === "live"
+    };
+    this.emit("status_changed", { status, state: this.state });
+  }
+}
+
+vi.mock("../src/conversation", () => ({
+  ManagedConversationController: MockConversationController,
+  ProtofaceConversationError: class ProtofaceConversationError extends Error {}
+}));
+
+async function render(element: React.ReactElement) {
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  await act(async () => {
+    root.render(element);
+  });
+  return { container, root };
+}
+
+async function unmount(root: Root) {
+  await act(async () => {
+    root.unmount();
+  });
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
+beforeEach(() => {
+  controllers.length = 0;
+  document.body.innerHTML = "";
+});
+
+describe("React conversation bindings", () => {
+  it("creates one controller per stable embed/base URL and ends on unmount", async () => {
+    const { useProtofaceConversation } = await import("../src/react");
+    function Host() {
+      const conversation = useProtofaceConversation({ embedId: "emb_1", apiBaseUrl: "https://api.example", computerVisionEnabled: false });
+      return React.createElement("span", null, conversation.status);
+    }
+
+    const { root } = await render(React.createElement(Host));
+    expect(controllers).toHaveLength(1);
+    expect(controllers[0].options).toMatchObject({ computerVisionEnabled: false });
+    expect(controllers[0].load).toHaveBeenCalledTimes(1);
+
+    await unmount(root);
+    expect(controllers[0].end).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not tear down a valid connection during React Strict Mode effect replay", async () => {
+    const { useProtofaceConversation } = await import("../src/react");
+    function Host() {
+      useProtofaceConversation({ embedId: "emb_1", apiBaseUrl: "https://api.example" });
+      return null;
+    }
+
+    const { root } = await render(React.createElement(StrictMode, null, React.createElement(Host)));
+
+    expect(controllers).toHaveLength(2);
+    expect(controllers[1].load).toHaveBeenCalledTimes(1);
+    expect(controllers[1].end).not.toHaveBeenCalled();
+
+    await unmount(root);
+    expect(controllers[1].end).toHaveBeenCalledTimes(1);
+  });
+
+  it("rerenders status from controller events", async () => {
+    const { useProtofaceConversation } = await import("../src/react");
+    function Host() {
+      const conversation = useProtofaceConversation({ embedId: "emb_1" });
+      return React.createElement("span", { "data-testid": "status" }, conversation.status);
+    }
+    const { container } = await render(React.createElement(Host));
+
+    expect(container.textContent).toBe("loading");
+    await act(async () => controllers[0].setStatus("ready_to_begin"));
+
+    expect(container.textContent).toBe("ready_to_begin");
+  });
+
+  it("renders only media elements and wires avatar attachment", async () => {
+    const { ProtofaceAvatar } = await import("../src/react");
+    const conversation = new MockConversationController({});
+    const { container, root } = await render(
+      React.createElement(ProtofaceAvatar, {
+        conversation: conversation as never,
+        className: "stage",
+        style: { width: 320 }
+      })
+    );
+
+    expect(container.querySelector("button")).toBeNull();
+    expect(container.querySelector("video")?.getAttribute("aria-label")).toBe("Protoface avatar video");
+    expect(container.querySelector("audio")?.getAttribute("aria-label")).toBe("Protoface avatar audio");
+    expect(conversation.setMediaElements).toHaveBeenLastCalledWith({
+      videoElement: container.querySelector("video"),
+      audioElement: container.querySelector("audio")
+    });
+
+    await unmount(root);
+    expect(conversation.setMediaElements).toHaveBeenLastCalledWith({ videoElement: null, audioElement: null });
+  });
+
+  it("leaves permission, consent, start, mute, and end calls to host UI", async () => {
+    const { useProtofaceConversation } = await import("../src/react");
+    function Host() {
+      const conversation = useProtofaceConversation({ embedId: "emb_1" });
+      useEffect(() => {
+        void conversation.requestPermissions();
+        void conversation.acceptConsent();
+        void conversation.start();
+        void conversation.toggleMicrophone();
+        void conversation.end();
+      }, [conversation]);
+      return null;
+    }
+
+    const { root } = await render(React.createElement(Host));
+
+    expect(controllers[0].requestPermissions).toHaveBeenCalledTimes(1);
+    expect(controllers[0].acceptConsent).toHaveBeenCalledTimes(1);
+    expect(controllers[0].start).toHaveBeenCalledTimes(1);
+    expect(controllers[0].toggleMicrophone).toHaveBeenCalledTimes(1);
+    expect(controllers[0].end).toHaveBeenCalledTimes(1);
+
+    await unmount(root);
+  });
+});
