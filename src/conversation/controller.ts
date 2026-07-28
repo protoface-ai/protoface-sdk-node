@@ -117,11 +117,17 @@ export class ManagedConversationController {
     const version = ++this.lifecycleVersion;
     this.resetForLoad();
     this.setStatus("loading");
-    const config = await this.requestJson<ManagedConversationConfig>(
-      `/api/v1/embed/${encodeURIComponent(this.embedId)}/config`,
-      { method: "GET" },
-      validateConfig
-    );
+    let config: ManagedConversationConfig;
+    try {
+      config = await this.requestJson<ManagedConversationConfig>(
+        `/api/v1/embed/${encodeURIComponent(this.embedId)}/config`,
+        { method: "GET" },
+        validateConfig
+      );
+    } catch (error) {
+      if (!this.isCurrentLifecycle(version)) return;
+      throw this.fail(asConversationError(error));
+    }
     if (!this.isCurrentLifecycle(version)) return;
 
     if (!config.enabled) {
@@ -142,7 +148,7 @@ export class ManagedConversationController {
   }
 
   async requestPermissions(): Promise<void> {
-    this.requireConfig();
+    const config = this.requireConfig();
     const version = this.lifecycleVersion;
     if (!navigator.mediaDevices?.getUserMedia) {
       throw this.fail(
@@ -155,8 +161,12 @@ export class ManagedConversationController {
 
     this.setStatus("requesting_device_access");
     try {
-      this.localMicStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      if (!this.isCurrentLifecycle(version)) return;
+      const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (!this.isCurrentLifecycle(version)) {
+        this.stopStream(micStream);
+        return;
+      }
+      this.localMicStream = micStream;
       this.updatePermissions({ microphone: "granted" });
       this.emit("device_access_changed", { permissions: this.state.permissions, state: this.state });
     } catch (cause) {
@@ -172,12 +182,16 @@ export class ManagedConversationController {
       );
     }
 
-    if (this.shouldRequestComputerVision(this.state.config)) {
+    if (this.shouldRequestComputerVision(config)) {
       try {
-        this.visionStream = await navigator.mediaDevices.getUserMedia({
+        const visionStream = await navigator.mediaDevices.getUserMedia({
           video: { facingMode: "user" }
         });
-        if (!this.isCurrentLifecycle(version)) return;
+        if (!this.isCurrentLifecycle(version)) {
+          this.stopStream(visionStream);
+          return;
+        }
+        this.visionStream = visionStream;
         this.updatePermissions({ computer_vision: "granted" });
       } catch {
         if (!this.isCurrentLifecycle(version)) return;
@@ -186,7 +200,12 @@ export class ManagedConversationController {
       this.emit("device_access_changed", { permissions: this.state.permissions, state: this.state });
     }
 
-    this.setStatus("consent_required");
+    if (config.consent.enabled) {
+      this.setStatus("consent_required");
+      return;
+    }
+
+    await this.createSetup(config, version, false);
   }
 
   async acceptConsent(): Promise<void> {
@@ -211,27 +230,41 @@ export class ManagedConversationController {
     }
 
     this.setStatus("confirming_consent");
+    await this.createSetup(config, version, true);
+  }
+
+  private async createSetup(config: ManagedConversationConfig, version: number, consentAccepted: boolean): Promise<void> {
     const permissions = {
-      microphone: "granted" as const,
+      microphone: setupPermission(this.state.permissions.microphone),
       computer_vision: setupPermission(this.state.permissions.computer_vision)
     };
-    const setup = await this.requestJson<SetupResponse>(
-      `/api/v1/embed/${encodeURIComponent(this.embedId)}/setup`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          permissions,
-          consent: { version: config.consent.version, accepted: true }
-        })
-      },
-      validateSetupResponse
-    );
+    const body: Record<string, unknown> = { permissions };
+    if (consentAccepted) {
+      body.consent = { version: config.consent.version, accepted: true };
+    }
+
+    let setup: SetupResponse;
+    try {
+      setup = await this.requestJson<SetupResponse>(
+        `/api/v1/embed/${encodeURIComponent(this.embedId)}/setup`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body)
+        },
+        validateSetupResponse
+      );
+    } catch (error) {
+      if (!this.isCurrentLifecycle(version)) return;
+      throw this.fail(asConversationError(error));
+    }
     if (!this.isCurrentLifecycle(version)) return;
     this.setupToken = setup.setup_token;
-    this.consentAccepted = true;
+    this.consentAccepted = consentAccepted;
     this.updateState({ consent: config.consent });
-    this.emit("consent_changed", { consent: config.consent, accepted: true, state: this.state });
+    if (consentAccepted) {
+      this.emit("consent_changed", { consent: config.consent, accepted: true, state: this.state });
+    }
     this.setStatus("ready_to_begin");
     this.emit("ready_to_begin", { state: this.state });
   }

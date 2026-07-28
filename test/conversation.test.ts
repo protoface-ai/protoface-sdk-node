@@ -310,6 +310,105 @@ describe("ManagedConversationController", () => {
     expect(controller.state.computerVisionEnabled).toBe(false);
   });
 
+  it("creates setup and becomes ready after permissions when consent is disabled", async () => {
+    const { fetchImpl, calls } = makeFetch({
+      "/config": response({
+        ...configResponse,
+        consent: { version: "v1", enabled: false }
+      })
+    });
+    const controller = new ManagedConversationController({ embedId: "emb_1", fetch: fetchImpl as typeof fetch });
+    const ready = vi.fn();
+    controller.on("ready_to_begin", ready);
+
+    await controller.load();
+    await controller.requestPermissions();
+
+    expect(controller.state.ready_to_begin).toBe(true);
+    expect(ready).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String(calls.find((call) => call.url.endsWith("/setup"))?.init?.body))).toMatchObject({
+      permissions: { microphone: "granted", computer_vision: "granted" }
+    });
+    expect(JSON.parse(String(calls.find((call) => call.url.endsWith("/setup"))?.init?.body))).not.toHaveProperty("consent");
+  });
+
+  it("moves to failed with an error when load requests fail", async () => {
+    const controller = new ManagedConversationController({
+      embedId: "emb_1",
+      fetch: makeFetch({ "/config": response({ error: "unavailable" }, { status: 503 }) }).fetchImpl as typeof fetch
+    });
+
+    await expect(controller.load()).rejects.toMatchObject({ code: "http_error", status: 503 });
+
+    expect(controller.state.failed).toBe(true);
+    expect(controller.state.error).toMatchObject({ code: "http_error", status: 503 });
+  });
+
+  it("moves to failed with an error when setup requests fail", async () => {
+    const controller = new ManagedConversationController({
+      embedId: "emb_1",
+      fetch: makeFetch({ "/setup": response({ error: "unavailable" }, { status: 503 }) }).fetchImpl as typeof fetch
+    });
+
+    await controller.load();
+    await controller.requestPermissions();
+    await expect(controller.acceptConsent()).rejects.toMatchObject({ code: "http_error", status: 503 });
+
+    expect(controller.state.failed).toBe(true);
+    expect(controller.state.error).toMatchObject({ code: "http_error", status: 503 });
+  });
+
+  it("stops microphone tracks acquired after the request becomes stale", async () => {
+    let resolveMic: ((stream: MockStream) => void) | undefined;
+    const micTrack = new MockTrack("audio");
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: {
+        getUserMedia: vi.fn(() => new Promise<MockStream>((resolve) => {
+          resolveMic = resolve;
+        }))
+      }
+    });
+    const controller = new ManagedConversationController({ embedId: "emb_1", fetch: makeFetch().fetchImpl as typeof fetch });
+
+    await controller.load();
+    const permissions = controller.requestPermissions();
+    await controller.end();
+    resolveMic?.(new MockStream([micTrack]));
+    await permissions;
+
+    expect(micTrack.stopped).toBe(true);
+    expect(controller.state.ended).toBe(true);
+  });
+
+  it("stops camera tracks acquired after the request becomes stale", async () => {
+    let resolveCamera: ((stream: MockStream) => void) | undefined;
+    const micTrack = new MockTrack("audio");
+    const cameraTrack = new MockTrack("video");
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: {
+        getUserMedia: vi
+          .fn()
+          .mockResolvedValueOnce(new MockStream([micTrack]))
+          .mockImplementationOnce(() => new Promise<MockStream>((resolve) => {
+            resolveCamera = resolve;
+          }))
+      }
+    });
+    const controller = new ManagedConversationController({ embedId: "emb_1", fetch: makeFetch().fetchImpl as typeof fetch });
+
+    await controller.load();
+    const permissions = controller.requestPermissions();
+    await Promise.resolve();
+    await controller.end();
+    resolveCamera?.(new MockStream([cameraTrack]));
+    await permissions;
+
+    expect(cameraTrack.stopped).toBe(true);
+    expect(controller.state.ended).toBe(true);
+  });
+
   it("preserves loaded server config while a refresh load is in flight", async () => {
     let configCalls = 0;
     let resolveSecondConfig: ((value: Response) => void) | undefined;
