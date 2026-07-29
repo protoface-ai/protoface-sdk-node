@@ -311,19 +311,33 @@ describe("ManagedConversationController", () => {
   });
 
   it("creates setup and becomes ready after permissions when consent is disabled", async () => {
+    let resolveSetup: ((value: Response) => void) | undefined;
     const { fetchImpl, calls } = makeFetch({
       "/config": response({
         ...configResponse,
         consent: { version: "v1", enabled: false }
+      }),
+      "/setup": () => new Promise<Response>((resolve) => {
+        resolveSetup = resolve;
       })
     });
     const controller = new ManagedConversationController({ embedId: "emb_1", fetch: fetchImpl as typeof fetch });
     const ready = vi.fn();
+    const statuses: string[] = [];
     controller.on("ready_to_begin", ready);
+    controller.on("status_changed", ({ status }) => statuses.push(status));
 
     await controller.load();
-    await controller.requestPermissions();
+    const permissions = controller.requestPermissions();
+    await vi.waitFor(() => expect(calls.some((call) => call.url.endsWith("/setup"))).toBe(true));
 
+    expect(controller.state.confirming_consent).toBe(true);
+    expect(controller.state.requesting_device_access).toBe(false);
+
+    resolveSetup?.(response({ setup_token: "aecs_secret", expires_at: "2026-07-28T00:00:00Z" }));
+    await permissions;
+
+    expect(statuses).toEqual(["loading", "device_access_required", "requesting_device_access", "confirming_consent", "ready_to_begin"]);
     expect(controller.state.ready_to_begin).toBe(true);
     expect(ready).toHaveBeenCalledTimes(1);
     expect(JSON.parse(String(calls.find((call) => call.url.endsWith("/setup"))?.init?.body))).toMatchObject({

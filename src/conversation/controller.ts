@@ -205,6 +205,7 @@ export class ManagedConversationController {
       return;
     }
 
+    this.setStatus("confirming_consent");
     await this.createSetup(config, version, false);
   }
 
