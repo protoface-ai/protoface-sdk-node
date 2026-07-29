@@ -215,7 +215,23 @@ describe("React conversation bindings", () => {
     expect(canvas?.style.width).toBe("100%");
     expect(canvas?.style.height).toBe("100%");
     expect(video?.style.visibility).toBe("hidden");
+    expect(video?.style.objectFit).toBe("cover");
     expect(drawImage).toHaveBeenCalledWith(video, 0, 112, 512, 288, 0, 0, 1280, 720);
+
+    await unmount(root);
+  });
+
+  it("sets object-fit cover on the direct video fallback", async () => {
+    const { ProtofaceAvatar } = await import("../src/react");
+    const conversation = new MockConversationController({});
+
+    const { container, root } = await render(
+      React.createElement(ProtofaceAvatar, {
+        conversation: conversation as never
+      })
+    );
+
+    expect(container.querySelector("video")?.style.objectFit).toBe("cover");
 
     await unmount(root);
   });
@@ -247,6 +263,39 @@ describe("React conversation bindings", () => {
     expect(drawImage).toHaveBeenCalledWith(video, 112, 0, 288, 512, 0, 0, 720, 1280);
 
     await unmount(root);
+  });
+
+  it("keeps the avatar crop frame loop running across unrelated rerenders", async () => {
+    vi.stubGlobal("requestAnimationFrame", vi.fn(() => 7));
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    const requestAnimationFrameMock = requestAnimationFrame as unknown as ReturnType<typeof vi.fn>;
+    const cancelAnimationFrameMock = cancelAnimationFrame as unknown as ReturnType<typeof vi.fn>;
+    const { ProtofaceAvatar } = await import("../src/react");
+    const conversation = new MockConversationController({});
+    conversation.state = {
+      ...conversation.state,
+      config: {
+        enabled: true,
+        computer_vision_enabled: false,
+        source_width: 1280,
+        source_height: 720,
+        consent: { version: "v1", enabled: false }
+      }
+    };
+
+    const { root } = await render(React.createElement(ProtofaceAvatar, { conversation: conversation as never }));
+
+    expect(requestAnimationFrameMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      root.render(React.createElement(ProtofaceAvatar, { conversation: conversation as never }));
+    });
+
+    expect(cancelAnimationFrameMock).not.toHaveBeenCalled();
+    expect(requestAnimationFrameMock).toHaveBeenCalledTimes(1);
+
+    await unmount(root);
+    vi.unstubAllGlobals();
   });
 
   it("leaves permission, consent, start, mute, and end calls to host UI", async () => {

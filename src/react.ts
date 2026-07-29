@@ -226,8 +226,9 @@ export function ProtofaceAvatar({ conversation, className, style }: ProtofaceAva
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const aspectRatio = embedAspectRatio(conversation.state.config);
-  const crop = avatarCrop(conversation.state.config);
+  const config = conversation.state.config;
+  const aspectRatio = embedAspectRatio(config);
+  const crop = useMemo(() => avatarCrop(config), [config?.source_width, config?.source_height]);
 
   useLayoutEffect(() => {
     conversation.setMediaElements({
@@ -301,7 +302,7 @@ export function ProtofaceAvatar({ conversation, className, style }: ProtofaceAva
       "aria-label": crop ? "Protoface source avatar video" : "Protoface avatar video",
       autoPlay: true,
       playsInline: true,
-      style: crop ? hiddenCropVideoStyle : undefined
+      style: crop ? hiddenCropVideoStyle : directVideoStyle
     }),
     createElement("audio", {
       ref: audioRef,
@@ -340,7 +341,12 @@ const croppedCanvasStyle: React.CSSProperties = {
   height: "100%"
 };
 
+const directVideoStyle: React.CSSProperties = {
+  objectFit: "cover"
+};
+
 const hiddenCropVideoStyle: React.CSSProperties = {
+  ...directVideoStyle,
   position: "absolute",
   width: 1,
   height: 1,
