@@ -1,6 +1,7 @@
 export { ProtofaceClient } from "./client";
 export { ProtofaceApiClient } from "./api";
 export { WebAudioPcmSource, float32ToPcm16 } from "./audio";
+export { embedAspectRatio } from "./conversation/aspect-ratio";
 export {
   DEFAULT_AVATAR_IDENTITY,
   LIVEKIT_AUDIO_STREAM_TOPIC,

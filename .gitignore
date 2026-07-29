@@ -5,3 +5,4 @@ dist/
 
 .env
 **/.env
+examples/conversation-test-app/

@@ -9,9 +9,13 @@ import type { ProtofaceConnection } from "../src/types";
 
 class FakeWriter {
   chunks: Uint8Array[] = [];
+  writeStarts: Uint8Array[] = [];
+  writeGate: (() => Promise<void>) | null = null;
   closed = false;
 
   async write(chunk: Uint8Array) {
+    this.writeStarts.push(chunk);
+    await this.writeGate?.();
     this.chunks.push(chunk);
   }
 
@@ -23,9 +27,16 @@ class FakeWriter {
 class FakeLocalParticipant {
   streams: Array<{ options: Record<string, unknown>; writer: FakeWriter }> = [];
   rpcs: Array<Record<string, unknown>> = [];
+  streamFailures = 0;
+  nextWriter: FakeWriter | null = null;
 
   async streamBytes(options?: Record<string, unknown>) {
-    const writer = new FakeWriter();
+    if (this.streamFailures > 0) {
+      this.streamFailures -= 1;
+      throw new Error("stream failed");
+    }
+    const writer = this.nextWriter ?? new FakeWriter();
+    this.nextWriter = null;
     this.streams.push({ options: options ?? {}, writer });
     return writer;
   }
@@ -63,10 +74,11 @@ const connection: ProtofaceConnection = {
 };
 
 describe("LiveKitProtofaceTransport", () => {
-  it("streams PCM chunks using Protoface's LiveKit audio stream contract", async () => {
+  it("reuses one LiveKit byte stream for PCM chunks until disconnect", async () => {
     const room = new FakeRoom();
     const transport = new LiveKitProtofaceTransport({ roomFactory: () => room });
-    const chunk = new Uint8Array([1, 2, 3]);
+    const firstChunk = new Uint8Array([1, 2, 3]);
+    const secondChunk = new Uint8Array([4, 5, 6]);
 
     await transport.connect({
       connection,
@@ -75,7 +87,8 @@ describe("LiveKitProtofaceTransport", () => {
       audioTopic: LIVEKIT_AUDIO_STREAM_TOPIC,
       controlTopic: LIVEKIT_CLEAR_BUFFER_RPC
     });
-    await transport.sendAudioData(chunk);
+    await transport.sendAudioData(firstChunk);
+    await transport.sendAudioData(secondChunk);
 
     expect(room.connectedWith).toEqual([
       { url: "wss://livekit.example", token: "viewer.jwt" }
@@ -87,7 +100,11 @@ describe("LiveKitProtofaceTransport", () => {
       destinationIdentities: ["protoface-avatar-agent"],
       mimeType: "audio/pcm"
     });
-    expect(room.localParticipant.streams[0]?.writer.chunks).toEqual([chunk]);
+    expect(room.localParticipant.streams[0]?.writer.chunks).toEqual([firstChunk, secondChunk]);
+    expect(room.localParticipant.streams[0]?.writer.closed).toBe(false);
+
+    await transport.disconnect();
+
     expect(room.localParticipant.streams[0]?.writer.closed).toBe(true);
   });
 
@@ -111,5 +128,100 @@ describe("LiveKitProtofaceTransport", () => {
         payload: ""
       }
     ]);
+  });
+
+  it("opens a new byte stream after stream creation fails", async () => {
+    const room = new FakeRoom();
+    room.localParticipant.streamFailures = 1;
+    const transport = new LiveKitProtofaceTransport({ roomFactory: () => room });
+    const chunk = new Uint8Array([1, 2, 3]);
+
+    await transport.connect({
+      connection,
+      videoElement: null,
+      audioElement: null,
+      audioTopic: LIVEKIT_AUDIO_STREAM_TOPIC,
+      controlTopic: LIVEKIT_CLEAR_BUFFER_RPC
+    });
+
+    await expect(transport.sendAudioData(chunk)).rejects.toThrow("stream failed");
+    await transport.sendAudioData(chunk);
+
+    expect(room.localParticipant.streams).toHaveLength(1);
+    expect(room.localParticipant.streams[0]?.writer.chunks).toEqual([chunk]);
+  });
+
+  it("opens a fresh byte stream after reconnecting with new connection options", async () => {
+    const firstRoom = new FakeRoom();
+    const secondRoom = new FakeRoom();
+    const rooms = [firstRoom, secondRoom];
+    const transport = new LiveKitProtofaceTransport({ roomFactory: () => rooms.shift()! });
+
+    await transport.connect({
+      connection,
+      videoElement: null,
+      audioElement: null,
+      audioTopic: "first-topic",
+      controlTopic: LIVEKIT_CLEAR_BUFFER_RPC
+    });
+    await transport.sendAudioData(new Uint8Array([1]));
+    await transport.connect({
+      connection: { ...connection, avatarIdentity: "second-avatar" },
+      videoElement: null,
+      audioElement: null,
+      audioTopic: "second-topic",
+      controlTopic: LIVEKIT_CLEAR_BUFFER_RPC
+    });
+    await transport.sendAudioData(new Uint8Array([2]));
+
+    expect(firstRoom.localParticipant.streams).toHaveLength(1);
+    expect(firstRoom.localParticipant.streams[0]?.writer.closed).toBe(true);
+    expect(secondRoom.localParticipant.streams).toHaveLength(1);
+    expect(secondRoom.localParticipant.streams[0]?.options).toMatchObject({
+      topic: "second-topic",
+      destinationIdentities: ["second-avatar"]
+    });
+    expect(secondRoom.localParticipant.streams[0]?.writer.chunks).toEqual([new Uint8Array([2])]);
+  });
+
+  it("serializes overlapping writes to the shared byte stream", async () => {
+    const room = new FakeRoom();
+    const writer = new FakeWriter();
+    let firstWriteIsPending = false;
+    let releaseFirstWrite: () => void = () => {
+      throw new Error("First write did not start.");
+    };
+    writer.writeGate = () => new Promise((resolve) => {
+      if (!firstWriteIsPending) {
+        firstWriteIsPending = true;
+        releaseFirstWrite = resolve;
+        return;
+      }
+      resolve();
+    });
+    room.localParticipant.nextWriter = writer;
+    const transport = new LiveKitProtofaceTransport({ roomFactory: () => room });
+    const firstChunk = new Uint8Array([1]);
+    const secondChunk = new Uint8Array([2]);
+
+    await transport.connect({
+      connection,
+      videoElement: null,
+      audioElement: null,
+      audioTopic: LIVEKIT_AUDIO_STREAM_TOPIC,
+      controlTopic: LIVEKIT_CLEAR_BUFFER_RPC
+    });
+
+    const firstSend = transport.sendAudioData(firstChunk);
+    const secondSend = transport.sendAudioData(secondChunk);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(writer.writeStarts).toEqual([firstChunk]);
+
+    releaseFirstWrite();
+    await Promise.all([firstSend, secondSend]);
+
+    expect(writer.writeStarts).toEqual([firstChunk, secondChunk]);
+    expect(writer.chunks).toEqual([firstChunk, secondChunk]);
   });
 });
