@@ -390,6 +390,71 @@ describe("ManagedConversationController", () => {
     expect(controller.state.error).toMatchObject({ code: "http_error", status: 503 });
   });
 
+  it("uses the API-provided message when credits or billing block conversations", async () => {
+    const controller = new ManagedConversationController({
+      embedId: "emb_1",
+      fetch: makeFetch({
+        "/conversations": response(
+          {
+            error: {
+              type: "quota_exceeded",
+              code: "insufficient_credit_balance",
+              message: "Add credits in Protoface billing to keep this avatar available.",
+              request_id: "req_1"
+            }
+          },
+          { status: 402 }
+        )
+      }).fetchImpl as typeof fetch
+    });
+
+    await controller.load();
+    await controller.requestPermissions();
+    await controller.acceptConsent();
+    await expect(controller.start()).rejects.toMatchObject({
+      code: "http_error",
+      status: 402,
+      apiErrorType: "quota_exceeded",
+      apiErrorCode: "insufficient_credit_balance",
+      requestId: "req_1"
+    });
+
+    expect(controller.state.error?.message).toBe("Add credits in Protoface billing to keep this avatar available.");
+    expect(controller.state.error?.message).not.toContain("HTTP 402");
+  });
+
+  it("uses the API-provided message when concurrent conversation quota is reached", async () => {
+    const controller = new ManagedConversationController({
+      embedId: "emb_1",
+      fetch: makeFetch({
+        "/conversations": response(
+          {
+            error: {
+              type: "quota_exceeded",
+              code: "concurrent_sessions",
+              message: "Upgrade in Protoface billing to allow more simultaneous avatar conversations."
+            }
+          },
+          { status: 429, headers: { "retry-after": "3" } }
+        )
+      }).fetchImpl as typeof fetch
+    });
+
+    await controller.load();
+    await controller.requestPermissions();
+    await controller.acceptConsent();
+    await expect(controller.start()).rejects.toMatchObject({
+      code: "http_error",
+      status: 429,
+      retryAfter: 3,
+      apiErrorType: "quota_exceeded",
+      apiErrorCode: "concurrent_sessions"
+    });
+
+    expect(controller.state.error?.message).toBe("Upgrade in Protoface billing to allow more simultaneous avatar conversations.");
+    expect(controller.state.error?.message).not.toContain("HTTP 429");
+  });
+
   it("stops microphone tracks acquired after the request becomes stale", async () => {
     let resolveMic: ((stream: MockStream) => void) | undefined;
     const micTrack = new MockTrack("audio");

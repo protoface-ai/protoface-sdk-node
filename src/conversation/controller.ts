@@ -628,11 +628,15 @@ export class ManagedConversationController {
     }
 
     if (!response.ok) {
+      const apiError = await readConversationApiError(response);
       throw new ProtofaceConversationError({
         code: "http_error",
-        message: `Protoface conversation request failed with HTTP ${response.status}.`,
+        message: conversationHttpErrorMessage(response.status, apiError),
         status: response.status,
-        retryAfter: parseRetryAfter(response.headers.get("retry-after"))
+        retryAfter: parseRetryAfter(response.headers.get("retry-after")),
+        apiErrorType: apiError?.type,
+        apiErrorCode: apiError?.code,
+        requestId: apiError?.requestId
       });
     }
 
@@ -738,4 +742,45 @@ export class ManagedConversationController {
 function normalizeApiBaseUrl(apiBaseUrl?: string): string {
   const baseUrl = apiBaseUrl?.trim() || DEFAULT_API_BASE_URL;
   return baseUrl.replace(/\/+$/, "");
+}
+
+type ConversationApiError = {
+  type?: string;
+  code?: string;
+  message?: string;
+  requestId?: string;
+};
+
+async function readConversationApiError(response: Response): Promise<ConversationApiError | null> {
+  try {
+    const payload = (await response.json()) as {
+      error?: {
+        type?: unknown;
+        code?: unknown;
+        message?: unknown;
+        request_id?: unknown;
+      };
+      message?: unknown;
+    };
+    return {
+      type: typeof payload.error?.type === "string" ? payload.error.type : undefined,
+      code: typeof payload.error?.code === "string" ? payload.error.code : undefined,
+      message:
+        typeof payload.error?.message === "string"
+          ? payload.error.message
+          : typeof payload.message === "string"
+            ? payload.message
+            : undefined,
+      requestId: typeof payload.error?.request_id === "string" ? payload.error.request_id : undefined
+    };
+  } catch {
+    return null;
+  }
+}
+
+function conversationHttpErrorMessage(status: number, apiError: ConversationApiError | null): string {
+  if (apiError?.message) return apiError.message;
+  if (status === 429) return "Too many conversations are starting right now. Please wait a moment and try again.";
+  if (status >= 500) return "Protoface conversations are temporarily unavailable. Please try again later.";
+  return "This conversation could not be started. Please check the embed settings and try again.";
 }

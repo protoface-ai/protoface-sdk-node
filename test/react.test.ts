@@ -6,12 +6,25 @@ type Listener = (payload: unknown) => void;
 
 const controllers: MockConversationController[] = [];
 let drawImage: ReturnType<typeof vi.fn>;
+let imageInstances: MockImage[];
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean;
 }
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+
+class MockImage {
+  onload: (() => void) | null = null;
+  onerror: (() => void) | null = null;
+  naturalWidth = 0;
+  naturalHeight = 0;
+  src = "";
+
+  constructor() {
+    imageInstances.push(this);
+  }
+}
 
 class MockConversationController {
   state: Record<string, unknown> = {
@@ -101,9 +114,11 @@ async function unmount(root: Root) {
 
 beforeEach(() => {
   controllers.length = 0;
+  imageInstances = [];
   document.body.innerHTML = "";
   drawImage = vi.fn();
   HTMLCanvasElement.prototype.getContext = vi.fn(() => ({ drawImage })) as unknown as typeof HTMLCanvasElement.prototype.getContext;
+  vi.stubGlobal("Image", MockImage);
   Object.defineProperty(HTMLVideoElement.prototype, "videoWidth", { configurable: true, value: 512 });
   Object.defineProperty(HTMLVideoElement.prototype, "videoHeight", { configurable: true, value: 512 });
   Object.defineProperty(HTMLMediaElement.prototype, "readyState", { configurable: true, value: HTMLMediaElement.HAVE_CURRENT_DATA });
@@ -209,11 +224,15 @@ describe("React conversation bindings", () => {
     const avatar = container.firstElementChild as HTMLElement;
     const video = container.querySelector("video");
     const canvas = container.querySelector("canvas");
-    expect(avatar.style.aspectRatio).toBe("1280 / 720");
+    expect(avatar.style.aspectRatio).toBe("");
+    expect(avatar.style.overflow).toBe("hidden");
     expect(canvas?.width).toBe(1280);
     expect(canvas?.height).toBe(720);
+    expect(canvas?.style.position).toBe("absolute");
+    expect(canvas?.style.inset).toBe("0px");
     expect(canvas?.style.width).toBe("100%");
     expect(canvas?.style.height).toBe("100%");
+    expect(canvas?.style.objectFit).toBe("cover");
     expect(video?.style.visibility).toBe("hidden");
     expect(video?.style.objectFit).toBe("cover");
     expect(drawImage).toHaveBeenCalledWith(video, 0, 112, 512, 288, 0, 0, 1280, 720);
@@ -231,7 +250,10 @@ describe("React conversation bindings", () => {
       })
     );
 
-    expect(container.querySelector("video")?.style.objectFit).toBe("cover");
+    const video = container.querySelector("video");
+    expect(video?.style.width).toBe("100%");
+    expect(video?.style.height).toBe("100%");
+    expect(video?.style.objectFit).toBe("cover");
 
     await unmount(root);
   });
@@ -265,6 +287,87 @@ describe("React conversation bindings", () => {
     await unmount(root);
   });
 
+  it("uses portrait preview dimensions to crop when source dimensions are unavailable", async () => {
+    const { ProtofaceAvatar } = await import("../src/react");
+    const conversation = new MockConversationController({});
+    conversation.state = {
+      ...conversation.state,
+      config: {
+        enabled: true,
+        computer_vision_enabled: false,
+        portrait_url: "https://example.com/cropped-preview.jpg",
+        consent: { version: "v1", enabled: false }
+      }
+    };
+
+    const { container, root } = await render(React.createElement(ProtofaceAvatar, { conversation: conversation as never }));
+
+    expect(container.querySelector("canvas")).toBeNull();
+    expect(container.querySelector("video")?.getAttribute("aria-label")).toBe("Protoface avatar video");
+    expect(imageInstances).toHaveLength(1);
+    expect(imageInstances[0].src).toBe("https://example.com/cropped-preview.jpg");
+
+    await act(async () => {
+      imageInstances[0].naturalWidth = 720;
+      imageInstances[0].naturalHeight = 1280;
+      imageInstances[0].onload?.();
+    });
+
+    const video = container.querySelector("video");
+    const canvas = container.querySelector("canvas");
+    expect(canvas?.width).toBe(720);
+    expect(canvas?.height).toBe(1280);
+    expect(video?.getAttribute("aria-label")).toBe("Protoface source avatar video");
+    expect(drawImage).toHaveBeenCalledWith(video, 112, 0, 288, 512, 0, 0, 720, 1280);
+
+    await unmount(root);
+  });
+
+  it("keeps source dimensions ahead of portrait preview dimensions", async () => {
+    const { ProtofaceAvatar } = await import("../src/react");
+    const conversation = new MockConversationController({});
+    conversation.state = {
+      ...conversation.state,
+      config: {
+        enabled: true,
+        computer_vision_enabled: false,
+        portrait_url: "https://example.com/square-preview.jpg",
+        consent: { version: "v1", enabled: false }
+      }
+    };
+
+    const { container, root } = await render(React.createElement(ProtofaceAvatar, { conversation: conversation as never }));
+
+    await act(async () => {
+      imageInstances[0].naturalWidth = 512;
+      imageInstances[0].naturalHeight = 512;
+      imageInstances[0].onload?.();
+    });
+
+    conversation.state = {
+      ...conversation.state,
+      config: {
+        enabled: true,
+        computer_vision_enabled: false,
+        portrait_url: "https://example.com/square-preview.jpg",
+        source_width: 1280,
+        source_height: 720,
+        consent: { version: "v1", enabled: false }
+      }
+    };
+    await act(async () => {
+      root.render(React.createElement(ProtofaceAvatar, { conversation: conversation as never }));
+    });
+
+    const video = container.querySelector("video");
+    const canvas = container.querySelector("canvas");
+    expect(canvas?.width).toBe(1280);
+    expect(canvas?.height).toBe(720);
+    expect(drawImage).toHaveBeenCalledWith(video, 0, 112, 512, 288, 0, 0, 1280, 720);
+
+    await unmount(root);
+  });
+
   it("keeps the avatar crop frame loop running across unrelated rerenders", async () => {
     vi.stubGlobal("requestAnimationFrame", vi.fn(() => 7));
     vi.stubGlobal("cancelAnimationFrame", vi.fn());
@@ -284,6 +387,46 @@ describe("React conversation bindings", () => {
     };
 
     const { root } = await render(React.createElement(ProtofaceAvatar, { conversation: conversation as never }));
+
+    expect(requestAnimationFrameMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      root.render(React.createElement(ProtofaceAvatar, { conversation: conversation as never }));
+    });
+
+    expect(cancelAnimationFrameMock).not.toHaveBeenCalled();
+    expect(requestAnimationFrameMock).toHaveBeenCalledTimes(1);
+
+    await unmount(root);
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps the portrait crop frame loop running across unrelated rerenders", async () => {
+    vi.stubGlobal("requestAnimationFrame", vi.fn(() => 7));
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    const requestAnimationFrameMock = requestAnimationFrame as unknown as ReturnType<typeof vi.fn>;
+    const cancelAnimationFrameMock = cancelAnimationFrame as unknown as ReturnType<typeof vi.fn>;
+    const { ProtofaceAvatar } = await import("../src/react");
+    const conversation = new MockConversationController({});
+    conversation.state = {
+      ...conversation.state,
+      config: {
+        enabled: true,
+        computer_vision_enabled: false,
+        portrait_url: "https://example.com/cropped-preview.jpg",
+        consent: { version: "v1", enabled: false }
+      }
+    };
+
+    const { root } = await render(React.createElement(ProtofaceAvatar, { conversation: conversation as never }));
+
+    expect(requestAnimationFrameMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      imageInstances[0].naturalWidth = 1280;
+      imageInstances[0].naturalHeight = 720;
+      imageInstances[0].onload?.();
+    });
 
     expect(requestAnimationFrameMock).toHaveBeenCalledTimes(1);
 

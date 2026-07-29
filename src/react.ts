@@ -227,8 +227,20 @@ export function ProtofaceAvatar({ conversation, className, style }: ProtofaceAva
   const audioRef = useRef<HTMLAudioElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const config = conversation.state.config;
-  const aspectRatio = embedAspectRatio(config);
-  const crop = useMemo(() => avatarCrop(config), [config?.source_width, config?.source_height]);
+  const sourceWidth = config?.source_width;
+  const sourceHeight = config?.source_height;
+  const portraitUrl = config?.portrait_url;
+  const hasSourceDimensions = hasAvatarSourceDimensions(sourceWidth, sourceHeight);
+  const [portraitDimensions, setPortraitDimensions] = useState<PortraitDimensions | null>(null);
+  const fallbackPortraitDimensions =
+    !hasSourceDimensions && portraitDimensions?.url === portraitUrl ? portraitDimensions : null;
+  const fallbackWidth = fallbackPortraitDimensions?.width;
+  const fallbackHeight = fallbackPortraitDimensions?.height;
+  const crop = useMemo(
+    () => avatarCrop(sourceWidth, sourceHeight, fallbackWidth, fallbackHeight),
+    [sourceWidth, sourceHeight, fallbackWidth, fallbackHeight]
+  );
+  const cropKey = crop ? `${crop.sourceWidth}:${crop.sourceHeight}:${crop.outputWidth}:${crop.outputHeight}` : "";
 
   useLayoutEffect(() => {
     conversation.setMediaElements({
@@ -239,6 +251,33 @@ export function ProtofaceAvatar({ conversation, className, style }: ProtofaceAva
       conversation.setMediaElements({ videoElement: null, audioElement: null });
     };
   }, [conversation]);
+
+  useEffect(() => {
+    if (!portraitUrl || hasSourceDimensions) {
+      if (!portraitUrl) setPortraitDimensions(null);
+      return undefined;
+    }
+
+    let cancelled = false;
+    setPortraitDimensions((current) => (current?.url === portraitUrl ? current : null));
+
+    const image = new Image();
+    image.onload = () => {
+      if (cancelled) return;
+      const { naturalWidth: width, naturalHeight: height } = image;
+      setPortraitDimensions(isPositiveInteger(width) && isPositiveInteger(height) ? { url: portraitUrl, width, height } : null);
+    };
+    image.onerror = () => {
+      if (!cancelled) setPortraitDimensions(null);
+    };
+    image.src = portraitUrl;
+
+    return () => {
+      cancelled = true;
+      image.onload = null;
+      image.onerror = null;
+    };
+  }, [portraitUrl, hasSourceDimensions]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -285,11 +324,11 @@ export function ProtofaceAvatar({ conversation, className, style }: ProtofaceAva
       if (videoFrameHandle !== null) video.cancelVideoFrameCallback?.(videoFrameHandle);
       if (animationFrame !== null) cancelAnimationFrame(animationFrame);
     };
-  }, [crop]);
+  }, [cropKey]);
 
   return createElement(
     "div",
-    { className, style: { ...containerCropStyle(aspectRatio), ...style } },
+    { className, style: { ...style, ...containerCropStyle(crop) } },
     crop
       ? createElement("canvas", {
           ref: canvasRef,
@@ -319,6 +358,12 @@ type AvatarCrop = {
   outputHeight: number;
 };
 
+type PortraitDimensions = {
+  url: string;
+  width: number;
+  height: number;
+};
+
 type CropFrame = {
   sourceX: number;
   sourceY: number;
@@ -326,10 +371,9 @@ type CropFrame = {
   sourceHeight: number;
 };
 
-function containerCropStyle(aspectRatio: string | null): React.CSSProperties {
-  if (!aspectRatio) return {};
+function containerCropStyle(crop: AvatarCrop | null): React.CSSProperties {
+  if (!crop) return {};
   return {
-    aspectRatio,
     position: "relative",
     overflow: "hidden"
   };
@@ -337,12 +381,20 @@ function containerCropStyle(aspectRatio: string | null): React.CSSProperties {
 
 const croppedCanvasStyle: React.CSSProperties = {
   display: "block",
+  position: "absolute",
+  inset: "0px",
   width: "100%",
-  height: "100%"
+  height: "100%",
+  objectFit: "cover",
+  objectPosition: "center center"
 };
 
 const directVideoStyle: React.CSSProperties = {
-  objectFit: "cover"
+  display: "block",
+  width: "100%",
+  height: "100%",
+  objectFit: "cover",
+  objectPosition: "center center"
 };
 
 const hiddenCropVideoStyle: React.CSSProperties = {
@@ -355,9 +407,14 @@ const hiddenCropVideoStyle: React.CSSProperties = {
   pointerEvents: "none"
 };
 
-function avatarCrop(config: ManagedConversationConfig | null): AvatarCrop | null {
-  const width = config?.source_width;
-  const height = config?.source_height;
+function avatarCrop(
+  sourceWidth: number | null | undefined,
+  sourceHeight: number | null | undefined,
+  fallbackWidth: number | undefined,
+  fallbackHeight: number | undefined
+): AvatarCrop | null {
+  const width = isPositiveInteger(sourceWidth) && isPositiveInteger(sourceHeight) ? sourceWidth : fallbackWidth;
+  const height = isPositiveInteger(sourceWidth) && isPositiveInteger(sourceHeight) ? sourceHeight : fallbackHeight;
   if (!isPositiveInteger(width) || !isPositiveInteger(height)) return null;
 
   return {
@@ -366,6 +423,13 @@ function avatarCrop(config: ManagedConversationConfig | null): AvatarCrop | null
     outputWidth: width,
     outputHeight: height
   };
+}
+
+function hasAvatarSourceDimensions(
+  sourceWidth: number | null | undefined,
+  sourceHeight: number | null | undefined
+): sourceWidth is number {
+  return isPositiveInteger(sourceWidth) && isPositiveInteger(sourceHeight);
 }
 
 function cropAvatarFrame(video: HTMLVideoElement, crop: AvatarCrop): CropFrame | null {

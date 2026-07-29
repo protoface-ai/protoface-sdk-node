@@ -15,6 +15,9 @@ export interface ProtofaceConversationErrorOptions {
   message: string;
   status?: number;
   retryAfter?: number | Date;
+  apiErrorType?: string;
+  apiErrorCode?: string;
+  requestId?: string;
   cause?: unknown;
 }
 
@@ -22,6 +25,9 @@ export class ProtofaceConversationError extends Error {
   readonly code: ProtofaceConversationErrorCode;
   readonly status?: number;
   readonly retryAfter?: number | Date;
+  readonly apiErrorType?: string;
+  readonly apiErrorCode?: string;
+  readonly requestId?: string;
   override readonly cause?: unknown;
 
   constructor(options: ProtofaceConversationErrorOptions) {
@@ -30,6 +36,9 @@ export class ProtofaceConversationError extends Error {
     this.code = options.code;
     this.status = options.status;
     this.retryAfter = options.retryAfter;
+    this.apiErrorType = options.apiErrorType;
+    this.apiErrorCode = options.apiErrorCode;
+    this.requestId = options.requestId;
     this.cause = options.cause;
   }
 }
