@@ -669,14 +669,13 @@ describe("ManagedConversationController", () => {
     expect(roomInstances[0].publishedData[0]?.options).toEqual({ reliable: true, topic: "protoface.embed.vision-frame" });
     const envelope = JSON.parse(new TextDecoder().decode(roomInstances[0].publishedData[0].data));
     expect(envelope).toMatchObject({
-      type: "vision_frame",
-      mime_type: "image/jpeg",
-      width: 512,
-      height: 288,
-      byte_length: 4,
-      data: "AQIDBA=="
+      v: 1,
+      index: 0,
+      total: 1,
+      jpeg: "AQIDBA=="
     });
-    expect(Date.parse(envelope.captured_at)).not.toBeNaN();
+    expect(typeof envelope.frameId).toBe("string");
+    expect(typeof envelope.capturedAt).toBe("number");
   });
 
   it("does not publish oversized computer-vision snapshots", async () => {
