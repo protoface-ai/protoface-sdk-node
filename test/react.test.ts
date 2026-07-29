@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 type Listener = (payload: unknown) => void;
 
 const controllers: MockConversationController[] = [];
+let drawImage: ReturnType<typeof vi.fn>;
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean;
@@ -13,7 +14,7 @@ declare global {
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 class MockConversationController {
-  state = {
+  state: Record<string, unknown> = {
     status: "loading",
     loading: true,
     device_access_required: false,
@@ -101,6 +102,11 @@ async function unmount(root: Root) {
 beforeEach(() => {
   controllers.length = 0;
   document.body.innerHTML = "";
+  drawImage = vi.fn();
+  HTMLCanvasElement.prototype.getContext = vi.fn(() => ({ drawImage })) as unknown as typeof HTMLCanvasElement.prototype.getContext;
+  Object.defineProperty(HTMLVideoElement.prototype, "videoWidth", { configurable: true, value: 512 });
+  Object.defineProperty(HTMLVideoElement.prototype, "videoHeight", { configurable: true, value: 512 });
+  Object.defineProperty(HTMLMediaElement.prototype, "readyState", { configurable: true, value: HTMLMediaElement.HAVE_CURRENT_DATA });
 });
 
 describe("React conversation bindings", () => {
@@ -172,6 +178,75 @@ describe("React conversation bindings", () => {
 
     await unmount(root);
     expect(conversation.setMediaElements).toHaveBeenLastCalledWith({ videoElement: null, audioElement: null });
+  });
+
+  it("exports embedAspectRatio from the React entrypoint", async () => {
+    const { embedAspectRatio } = await import("../src/react");
+
+    expect(embedAspectRatio({ source_width: 1280, source_height: 720 })).toBe("1280 / 720");
+  });
+
+  it("uses source dimensions to crop landscape padding from the standardized square avatar video", async () => {
+    const { ProtofaceAvatar } = await import("../src/react");
+    const conversation = new MockConversationController({});
+    conversation.state = {
+      ...conversation.state,
+      config: {
+        enabled: true,
+        computer_vision_enabled: false,
+        source_width: 1280,
+        source_height: 720,
+        consent: { version: "v1", enabled: false }
+      }
+    };
+
+    const { container, root } = await render(
+      React.createElement(ProtofaceAvatar, {
+        conversation: conversation as never
+      })
+    );
+
+    const avatar = container.firstElementChild as HTMLElement;
+    const video = container.querySelector("video");
+    const canvas = container.querySelector("canvas");
+    expect(avatar.style.aspectRatio).toBe("1280 / 720");
+    expect(canvas?.width).toBe(1280);
+    expect(canvas?.height).toBe(720);
+    expect(canvas?.style.width).toBe("100%");
+    expect(canvas?.style.height).toBe("100%");
+    expect(video?.style.visibility).toBe("hidden");
+    expect(drawImage).toHaveBeenCalledWith(video, 0, 112, 512, 288, 0, 0, 1280, 720);
+
+    await unmount(root);
+  });
+
+  it("uses source dimensions to crop portrait padding from the standardized square avatar video", async () => {
+    const { ProtofaceAvatar } = await import("../src/react");
+    const conversation = new MockConversationController({});
+    conversation.state = {
+      ...conversation.state,
+      config: {
+        enabled: true,
+        computer_vision_enabled: false,
+        source_width: 720,
+        source_height: 1280,
+        consent: { version: "v1", enabled: false }
+      }
+    };
+
+    const { container, root } = await render(
+      React.createElement(ProtofaceAvatar, {
+        conversation: conversation as never
+      })
+    );
+
+    const video = container.querySelector("video");
+    const canvas = container.querySelector("canvas");
+    expect(canvas?.width).toBe(720);
+    expect(canvas?.height).toBe(1280);
+    expect(drawImage).toHaveBeenCalledWith(video, 112, 0, 288, 512, 0, 0, 720, 1280);
+
+    await unmount(root);
   });
 
   it("leaves permission, consent, start, mute, and end calls to host UI", async () => {

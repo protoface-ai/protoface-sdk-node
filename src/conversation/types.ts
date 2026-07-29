@@ -33,6 +33,8 @@ export interface ManagedConversationConfig {
   cta_button_label?: string;
   avatar?: unknown;
   portrait_url?: string;
+  source_width?: number | null;
+  source_height?: number | null;
   computer_vision_enabled: boolean;
   consent: ConversationConsentConfig;
   [key: string]: unknown;

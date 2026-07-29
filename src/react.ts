@@ -3,6 +3,7 @@ import { createElement, useCallback, useEffect, useLayoutEffect, useMemo, useRef
 import { ProtofaceClient } from "./client";
 import type { StopListening } from "./audio";
 import type { ProtofaceClientOptions, ProtofaceClientStatus } from "./types";
+import { embedAspectRatio } from "./conversation/aspect-ratio";
 import {
   ManagedConversationController,
   ProtofaceConversationError,
@@ -14,6 +15,8 @@ import {
   type ManagedConversationPermissions,
   type ManagedConversationStatus
 } from "./conversation";
+
+export { embedAspectRatio };
 
 export interface UseProtofaceClientOptions
   extends Omit<ProtofaceClientOptions, "videoElement" | "audioElement"> {
@@ -222,6 +225,9 @@ export function useProtofaceConversation(options: UseProtofaceConversationOption
 export function ProtofaceAvatar({ conversation, className, style }: ProtofaceAvatarProps): JSX.Element {
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const aspectRatio = embedAspectRatio(conversation.state.config);
+  const crop = avatarCrop(conversation.state.config);
 
   useLayoutEffect(() => {
     conversation.setMediaElements({
@@ -233,14 +239,69 @@ export function ProtofaceAvatar({ conversation, className, style }: ProtofaceAva
     };
   }, [conversation]);
 
+  useEffect(() => {
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    if (!video || !canvas || !crop) return undefined;
+
+    canvas.width = crop.outputWidth;
+    canvas.height = crop.outputHeight;
+    let animationFrame: number | null = null;
+    let videoFrameHandle: number | null = null;
+    let cancelled = false;
+
+    const draw = () => {
+      if (cancelled) return;
+      const frame = cropAvatarFrame(video, crop);
+      if (frame) {
+        canvas.getContext("2d")?.drawImage(
+          video,
+          frame.sourceX,
+          frame.sourceY,
+          frame.sourceWidth,
+          frame.sourceHeight,
+          0,
+          0,
+          crop.outputWidth,
+          crop.outputHeight
+        );
+      }
+    };
+
+    const schedule = () => {
+      if (cancelled) return;
+      draw();
+      if (video.requestVideoFrameCallback) {
+        videoFrameHandle = video.requestVideoFrameCallback(() => schedule());
+      } else {
+        animationFrame = requestAnimationFrame(schedule);
+      }
+    };
+
+    schedule();
+    return () => {
+      cancelled = true;
+      if (videoFrameHandle !== null) video.cancelVideoFrameCallback?.(videoFrameHandle);
+      if (animationFrame !== null) cancelAnimationFrame(animationFrame);
+    };
+  }, [crop]);
+
   return createElement(
     "div",
-    { className, style },
+    { className, style: { ...containerCropStyle(aspectRatio), ...style } },
+    crop
+      ? createElement("canvas", {
+          ref: canvasRef,
+          "aria-label": "Protoface avatar video",
+          style: croppedCanvasStyle
+        })
+      : null,
     createElement("video", {
       ref: videoRef,
-      "aria-label": "Protoface avatar video",
+      "aria-label": crop ? "Protoface source avatar video" : "Protoface avatar video",
       autoPlay: true,
-      playsInline: true
+      playsInline: true,
+      style: crop ? hiddenCropVideoStyle : undefined
     }),
     createElement("audio", {
       ref: audioRef,
@@ -248,4 +309,85 @@ export function ProtofaceAvatar({ conversation, className, style }: ProtofaceAva
       autoPlay: true
     })
   );
+}
+
+type AvatarCrop = {
+  sourceWidth: number;
+  sourceHeight: number;
+  outputWidth: number;
+  outputHeight: number;
+};
+
+type CropFrame = {
+  sourceX: number;
+  sourceY: number;
+  sourceWidth: number;
+  sourceHeight: number;
+};
+
+function containerCropStyle(aspectRatio: string | null): React.CSSProperties {
+  if (!aspectRatio) return {};
+  return {
+    aspectRatio,
+    position: "relative",
+    overflow: "hidden"
+  };
+}
+
+const croppedCanvasStyle: React.CSSProperties = {
+  display: "block",
+  width: "100%",
+  height: "100%"
+};
+
+const hiddenCropVideoStyle: React.CSSProperties = {
+  position: "absolute",
+  width: 1,
+  height: 1,
+  opacity: 0,
+  visibility: "hidden",
+  pointerEvents: "none"
+};
+
+function avatarCrop(config: ManagedConversationConfig | null): AvatarCrop | null {
+  const width = config?.source_width;
+  const height = config?.source_height;
+  if (!isPositiveInteger(width) || !isPositiveInteger(height)) return null;
+
+  return {
+    sourceWidth: width,
+    sourceHeight: height,
+    outputWidth: width,
+    outputHeight: height
+  };
+}
+
+function cropAvatarFrame(video: HTMLVideoElement, crop: AvatarCrop): CropFrame | null {
+  const frameWidth = video.videoWidth;
+  const frameHeight = video.videoHeight;
+  if (!frameWidth || !frameHeight) return null;
+
+  const sourceRatio = crop.sourceWidth / crop.sourceHeight;
+  const frameRatio = frameWidth / frameHeight;
+  if (sourceRatio >= frameRatio) {
+    const sourceHeight = frameWidth / sourceRatio;
+    return {
+      sourceX: 0,
+      sourceY: (frameHeight - sourceHeight) / 2,
+      sourceWidth: frameWidth,
+      sourceHeight
+    };
+  }
+
+  const sourceWidth = frameHeight * sourceRatio;
+  return {
+    sourceX: (frameWidth - sourceWidth) / 2,
+    sourceY: 0,
+    sourceWidth,
+    sourceHeight: frameHeight
+  };
+}
+
+function isPositiveInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0;
 }

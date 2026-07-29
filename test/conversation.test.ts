@@ -263,6 +263,24 @@ describe("ManagedConversationController", () => {
     });
   });
 
+  it("preserves uploaded-avatar source dimensions from embed config", async () => {
+    const { fetchImpl } = makeFetch({
+      "/config": response({
+        ...configResponse,
+        source_width: 1080,
+        source_height: 1920
+      })
+    });
+    const controller = new ManagedConversationController({ embedId: "emb_1", fetch: fetchImpl as typeof fetch });
+
+    await controller.load();
+
+    expect(controller.state.config).toMatchObject({
+      source_width: 1080,
+      source_height: 1920
+    });
+  });
+
   it("captures front camera permission but only publishes the microphone track", async () => {
     const { fetchImpl, calls } = makeFetch();
     const controller = new ManagedConversationController({ embedId: "emb_1", fetch: fetchImpl as typeof fetch });

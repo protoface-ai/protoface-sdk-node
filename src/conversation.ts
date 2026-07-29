@@ -1,4 +1,5 @@
 export { ManagedConversationController } from "./conversation/controller";
+export { embedAspectRatio } from "./conversation/aspect-ratio";
 export { ProtofaceConversationError } from "./conversation/errors";
 export type { ProtofaceConversationErrorCode, ProtofaceConversationErrorOptions } from "./conversation/errors";
 export type {
