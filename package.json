@@ -1,11 +1,11 @@
 {
   "name": "protoface-client",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Browser-first Protoface WebRTC client for realtime avatar apps.",
   "type": "module",
   "repository": {
-      "type": "git",
-      "url": "https://github.com/protoface-ai/protoface-sdk-node.git"
+    "type": "git",
+    "url": "https://github.com/protoface-ai/protoface-sdk-node.git"
   },
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
