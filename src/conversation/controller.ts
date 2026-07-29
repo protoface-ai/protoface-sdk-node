@@ -551,14 +551,12 @@ export class ManagedConversationController {
     const bytes = new Uint8Array(await blob.arrayBuffer());
     const frameId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const envelope = {
-      type: "vision_frame",
-      frame_id: frameId,
-      captured_at: new Date().toISOString(),
-      mime_type: "image/jpeg",
-      width: canvas.width,
-      height: canvas.height,
-      byte_length: bytes.byteLength,
-      data: uint8ToBase64(bytes)
+      v: 1,
+      frameId,
+      index: 0,
+      total: 1,
+      capturedAt: Date.now(),
+      jpeg: uint8ToBase64(bytes)
     };
     await room.localParticipant.publishData(encodeJson(envelope), { reliable: true, topic: VISION_TOPIC });
   }
