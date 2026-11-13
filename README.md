@@ -1,6 +1,6 @@
-# Protoface Node SDK
+# Protoface Realtime Node SDK
 
-NodeJS and React SDK for adding a realtime Protoface avatar to any voice AI web app.
+NodeJS and React SDK for adding a Protoface Realtime avatar to any voice AI web app.
 
 ## About Protoface
 
